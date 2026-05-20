@@ -4,10 +4,21 @@ on:
   push:
     tags:
       - v*
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Docker image tag to publish
+        required: true
+        default: dev
+      push_latest:
+        description: Also update the latest tag
+        required: true
+        type: boolean
+        default: true
 
 env:
   APP_NAME: CLIProxyAPI
-  DOCKERHUB_REPO: eceasy/cli-proxy-api
+  DOCKERHUB_REPO: zoowayss/cli-proxy-api
 
 jobs:
   docker_amd64:
@@ -28,9 +39,25 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Generate Build Metadata
         run: |
-          echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.image_tag }}"
+            PUSH_LATEST="${{ inputs.push_latest }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+            PUSH_LATEST="true"
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "PUSH_LATEST=${PUSH_LATEST}" >> $GITHUB_ENV
           echo COMMIT=`git rev-parse --short HEAD` >> $GITHUB_ENV
           echo BUILD_DATE=`date -u +%Y-%m-%dT%H:%M:%SZ` >> $GITHUB_ENV
+          {
+            echo "DOCKER_TAGS<<EOF"
+            if [ "${PUSH_LATEST}" = "true" ]; then
+              echo "${DOCKERHUB_REPO}:latest-amd64"
+            fi
+            echo "${DOCKERHUB_REPO}:${VERSION}-amd64"
+            echo "EOF"
+          } >> $GITHUB_ENV
       - name: Build and push (amd64)
         uses: docker/build-push-action@v6
         with:
@@ -42,8 +69,7 @@ jobs:
             COMMIT=${{ env.COMMIT }}
             BUILD_DATE=${{ env.BUILD_DATE }}
           tags: |
-            ${{ env.DOCKERHUB_REPO }}:latest-amd64
-            ${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }}-amd64
+            ${{ env.DOCKER_TAGS }}
 
   docker_arm64:
     runs-on: ubuntu-24.04-arm
@@ -63,9 +89,25 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Generate Build Metadata
         run: |
-          echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.image_tag }}"
+            PUSH_LATEST="${{ inputs.push_latest }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+            PUSH_LATEST="true"
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "PUSH_LATEST=${PUSH_LATEST}" >> $GITHUB_ENV
           echo COMMIT=`git rev-parse --short HEAD` >> $GITHUB_ENV
           echo BUILD_DATE=`date -u +%Y-%m-%dT%H:%M:%SZ` >> $GITHUB_ENV
+          {
+            echo "DOCKER_TAGS<<EOF"
+            if [ "${PUSH_LATEST}" = "true" ]; then
+              echo "${DOCKERHUB_REPO}:latest-arm64"
+            fi
+            echo "${DOCKERHUB_REPO}:${VERSION}-arm64"
+            echo "EOF"
+          } >> $GITHUB_ENV
       - name: Build and push (arm64)
         uses: docker/build-push-action@v6
         with:
@@ -77,8 +119,7 @@ jobs:
             COMMIT=${{ env.COMMIT }}
             BUILD_DATE=${{ env.BUILD_DATE }}
           tags: |
-            ${{ env.DOCKERHUB_REPO }}:latest-arm64
-            ${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }}-arm64
+            ${{ env.DOCKER_TAGS }}
 
   docker_manifest:
     runs-on: ubuntu-latest
@@ -97,19 +138,29 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Generate Build Metadata
         run: |
-          echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.image_tag }}"
+            PUSH_LATEST="${{ inputs.push_latest }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+            PUSH_LATEST="true"
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "PUSH_LATEST=${PUSH_LATEST}" >> $GITHUB_ENV
           echo COMMIT=`git rev-parse --short HEAD` >> $GITHUB_ENV
           echo BUILD_DATE=`date -u +%Y-%m-%dT%H:%M:%SZ` >> $GITHUB_ENV
       - name: Create and push multi-arch manifests
         run: |
           docker buildx imagetools create \
-            --tag "${DOCKERHUB_REPO}:latest" \
-            "${DOCKERHUB_REPO}:latest-amd64" \
-            "${DOCKERHUB_REPO}:latest-arm64"
-          docker buildx imagetools create \
             --tag "${DOCKERHUB_REPO}:${VERSION}" \
             "${DOCKERHUB_REPO}:${VERSION}-amd64" \
             "${DOCKERHUB_REPO}:${VERSION}-arm64"
+          if [ "${PUSH_LATEST}" = "true" ]; then
+            docker buildx imagetools create \
+              --tag "${DOCKERHUB_REPO}:latest" \
+              "${DOCKERHUB_REPO}:latest-amd64" \
+              "${DOCKERHUB_REPO}:latest-arm64"
+          fi
       - name: Cleanup temporary tags
         continue-on-error: true
         env:
@@ -141,7 +192,9 @@ jobs:
             return 0
           }
 
-          delete_tag "latest-amd64"
-          delete_tag "latest-arm64"
+          if [ "${PUSH_LATEST}" = "true" ]; then
+            delete_tag "latest-amd64"
+            delete_tag "latest-arm64"
+          fi
           delete_tag "${VERSION}-amd64"
           delete_tag "${VERSION}-arm64"
